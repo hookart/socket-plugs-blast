@@ -5,6 +5,12 @@ import "../common/Ownable.sol";
 import {Gauge} from "../common/Gauge.sol";
 import {IConnector, IHub} from "./ConnectorPlug.sol";
 import {RescueFundsLib} from "../libraries/RescueFundsLib.sol";
+import {IERC20Rebasing} from "../interfaces/IERC20Rebasing.sol";
+
+struct SubstantialYieldRecipient {
+    address recipient;
+    uint256 shares;
+}
 
 // @todo: separate our connecter plugs
 contract Vault is Gauge, IHub, Ownable(msg.sender) {
@@ -57,6 +63,7 @@ contract Vault is Gauge, IHub, Ownable(msg.sender) {
         address receiver,
         uint256 unlockedAmount
     );
+    event PacmanDesignated(address pacman);
 
     constructor(address token_) {
         token__ = ERC20(token_);
@@ -204,5 +211,64 @@ contract Vault is Gauge, IHub, Ownable(msg.sender) {
         uint256 amount_
     ) external onlyOwner {
         RescueFundsLib.rescueFunds(token_, rescueTo_, amount_);
+    }
+
+    /**
+     * Configures the yield mode of the token
+     * @param mode_ The yield mode to set
+     */
+    function setYieldMode(IERC20Rebasing.YieldMode mode_) external onlyOwner {
+        require(
+            mode_ <= IERC20Rebasing.YieldMode.CLAIMABLE,
+            "SUBSTANTIAL YIELD only allowed possible in CLAIMABLE mode"
+        );
+        IERC20Rebasing(token__).configure(mode_);
+    }
+
+    /**
+     * Designates the pacman. The pacman gives users yield from on high.
+     * @param pacman_ The address of the pacman
+     */
+    function designatePacman(address pacman_) external onlyOwner {
+        _designatePacman(pacman_);
+    }
+
+    function _designatePacman(address pacman_) internal {
+        _pacman = pacman_;
+        emit PacmanDesignated(pacman_);
+    }
+
+    modifier onlyPacman() {
+        require(
+            msg.sender == _pacman,
+            "ONLY PACMAN can create a chain with YIELD"
+        );
+        _;
+    }
+
+    /**
+     * Claims the substantial yield and distributes it to the recipients
+     * @param recipients_ The recipients to distribute the yield to
+     * @param minAmount The minimum amount of yield to claim
+     * @param totalShares The total shares of the recipients
+     */
+    function claimAndDistributeSubstantialYield(
+        SubstantialYieldRecipient[] calldata recipients_,
+        uint256 minAmount,
+        uint256 totalShares
+    ) external onlyPacman {
+        uint256 amountToClaim = IERC20Rebasing(token__).getClaimableAmount(
+            address(this)
+        );
+        require(amountToClaim >= minAmount, "YIELD NOT SUBSTANTIAL ENOUGH");
+        uint256 remainingShares = totalShares;
+        for (uint256 i; i < recipients_.length; i++) {
+            IERC20Rebasing(token__).claim(
+                recipients_[i].recipient,
+                (amountToClaim * recipients_[i].shares) / totalShares
+            );
+            remainingShares -= recipients_[i].shares;
+        }
+        require(remainingShares == 0, "INSUFFICIENT YEILD DISTRIBUTED");
     }
 }
